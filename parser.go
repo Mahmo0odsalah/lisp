@@ -6,6 +6,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 )
 
@@ -52,11 +53,11 @@ type SIPMessage struct {
 
 func (msg SIPMessage) FindHeaderByName(name string) (string, error) {
 	for _, header := range(msg.Headers){
-		if (header.Name == name){
+		if header.Name == name {
 			return header.Value, nil
 		}
 	}
-	return "", errors.New("No header found with the provided name")
+	return "", errors.New("no header found with the provided name")
 }
 
 func Parse(packet []byte) (m SIPMessage){ //TODO: Handle errors
@@ -65,14 +66,17 @@ func Parse(packet []byte) (m SIPMessage){ //TODO: Handle errors
 	// TODO: Look into these headers: (Route, Record-Route, Proxy-Require, Max-Forwards, and Proxy-Authorization)
 
 	strMsg := string(packet)
-	lines := strings.Split(strMsg, "\n")
+
+	content := strings.Split(strMsg, "\r\n\r\n")
+
+	lines := strings.Split(content[0], "\n")
 
 	startLine := strings.Split(lines[0], " ")
 	startLine[2] = strings.TrimSpace(startLine[2])
 
-	no_of_headers := len(lines) - 3
+	no_of_headers := len(lines) - 1
 	m.Headers = make([]Header, no_of_headers)
-	if startLine[0] == "SIP/2.0"	 { // Response
+	if startLine[0] == "SIP/2.0" { // Response
 		m.Mtype = SIPResponse
 		m.StatusLine = StatusLine{
 			StatusCode: startLine[1],
@@ -96,12 +100,30 @@ func Parse(packet []byte) (m SIPMessage){ //TODO: Handle errors
 		hd := strings.Split(strings.TrimSpace(line), ": ")
 		m.Headers[i] = Header{
 			Name: hd[0],
-			Value: hd[1],
+			Value: strings.TrimSpace(hd[1]),
 		}
-		
 	}
 
-	m.Body = lines[len(lines)-1]
+	m.Body = content[1]
 
 	return m
+}
+
+func (msg SIPMessage) String() (str string) {
+	const linebreak = "\r\n"
+	if msg.Mtype == SIPRequest {
+		str += fmt.Sprintf("%s %s %s%s", msg.RequestLine.Method, msg.RequestLine.URI, msg.RequestLine.SipVersion, linebreak)
+	} else {
+		str += fmt.Sprintf("%s %s %s%s", msg.StatusLine.SipVersion, msg.StatusLine.StatusCode, msg.StatusLine.ReasonPhrase, linebreak)
+	}
+
+	for _, hd := range(msg.Headers) {
+		str += fmt.Sprintf("%s: %s%s", hd.Name, hd.Value, linebreak)
+	}
+
+	str += linebreak
+	str += linebreak
+
+	str += msg.Body
+	return
 }
