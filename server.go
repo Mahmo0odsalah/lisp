@@ -9,11 +9,11 @@ import (
 
 func main(){
 	publicIp, err := GetPublicIP()
-	if (err != nil){
+	if err != nil{
 		panic(fmt.Sprintf("Unable to retrieve public IP: %v", err))
 	}
 	privateIp, err := GetPrivateIP()
-	if (err != nil) {
+	if err != nil {
 		panic(fmt.Sprintf("Unable to retrieve private IP: %v", err))
 	}
 	
@@ -36,14 +36,12 @@ func main(){
   b := make([]byte, 100000) // TODO: Change to the theoritical max packet size (or SIP packet size if exists)
 
   for {
-    n, _, _, src, err := conn.ReadMsgUDP(b, []byte{})
+    n, _, _, _, err := conn.ReadMsgUDP(b, []byte{})
 		
 		// TODO: GOroutine-ify
-    fmt.Printf("Read %d bytes from %v\n", n, src)
-
 		// TODO: Do we want to parse the partially received packet in case of an error?
     packet := b[0:n]
-
+		
     
     if err != nil { // TODO: Properly handle error
       fmt.Println(err)
@@ -54,7 +52,7 @@ func main(){
 		// Step 1: Determine if request or response, if response goto step 5
 		// Step 2: If this is an INVITE, respond with 100 trying
 		// Step 3: Add A VIA header before the original VIA header that indicates the proxy's endpoint, RFC3261 P:13
-		// Step 4: Proxy the request to the target
+		// Step 4: Proxy the request to the target, go to end.
 		// Step 5: This is a response, remove the proxy's VIA from the packet
 		// Step 6: Determine the target using the now top VIA header
 		// Step 7: Proxy
@@ -65,19 +63,17 @@ func main(){
 		// TODO: Check that Max-Forwards didn't reach 0
 		// TODO: Decrement Max-Forwards
 
-		if (p.Mtype == SIPRequest){
-			if (p.RequestLine.Method == "INVITE"){
+		if p.Mtype == SIPRequest {
+			if p.RequestLine.Method == "INVITE" {
 				// TODO: Respond with 100 Trying
 			}
 			// Proxying to upstream
 			remoteIP = upstreamIP
 			remotePort = upstreamPort
-			fmt.Println("Before:")
-			fmt.Println(p)
 
 			// Prefer Proxy's private IP when possible
 			var proxyIp string
-			if (IsPublicIP(upstreamIP)){
+			if IsPublicIP(upstreamIP) {
 				proxyIp = publicIp
 			} else {
 				proxyIp = privateIp
@@ -90,20 +86,28 @@ func main(){
 			copy(newHeaders[1:], p.Headers)
 			p.Headers = newHeaders
 		} else {
-			if (p.StatusLine.StatusCode == "100"){
+			if p.StatusLine.StatusCode == "100" {
 				continue // Proxy already responds with 100 Trying, no need to proxy 100s
 			} 
 
-			newHeaders := make([]Header, len(p.Headers) - 1)
+			newHeaders := make([]Header, 0, len(p.Headers) - 1)
 			viaRemoved := false
-			for _, hd := range newHeaders {
-				if (!viaRemoved && hd.Name == "Via") {
+			for _, hd := range p.Headers {
+				if !viaRemoved && hd.Name == "Via" {
+					viaRemoved = true
 					continue
 				}
 				newHeaders = append(newHeaders, hd)
 			}
+			p.Headers = newHeaders
 
-			via, _ := p.FindHeaderByName("Via")
+			via, err := p.FindHeaderByName("Via")
+
+			if err != nil {
+				fmt.Println(err)
+				fmt.Println(p.Headers)
+				fmt.Println(via)
+			}
 			// SIP/2.0/UDP 192.168.0.222:5062;rport;branch=z9hG4bKPjd87fd14a-5db8-4b66-a50b-c28bee9cc49c
 			transport := strings.Split(via, ";")[0]
 			ip, port, _ := net.SplitHostPort(strings.Split(transport, " ")[1])
@@ -111,12 +115,15 @@ func main(){
 			remotePort, _ = strconv.Atoi(port)
 		}
 		targetAddr := net.UDPAddr{ IP: remoteIP, Port: remotePort }
-		fmt.Printf("Proxying %v to %v\n", p, targetAddr)
 
-		// TODO: Send the new packet
-		_, _, err = conn.WriteMsgUDP(packet, []byte{}, &targetAddr)
+		
+		newPacket := []byte (p.String())
 
-		if err != nil { // TODO: Properly handle error
+		// fmt.Printf("Proxying %s to %v\n", p, targetAddr)
+
+		_, _, err = conn.WriteMsgUDP(newPacket, []byte{}, &targetAddr)
+
+		if err != nil { // TODO: Properly handle errors
       fmt.Println(err)
     }
   }
