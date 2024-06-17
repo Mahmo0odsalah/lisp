@@ -3,128 +3,92 @@ package main
 import (
 	"fmt"
 	"net"
-	"strconv"
-	"strings"
+	"time"
 )
 
+var PublicIP string
+var PrivateIP string
+var UpstreamIP net.IP
+var UpstreamPort int
+var ProxyPort int
+
 func main(){
-	publicIp, err := GetPublicIP()
+	var err error
+
+	PublicIP, err = GetPublicIP()
 	if err != nil{
 		panic(fmt.Sprintf("Unable to retrieve public IP: %v", err))
 	}
-	privateIp, err := GetPrivateIP()
+
+	PrivateIP, err = GetPrivateIP()
 	if err != nil {
 		panic(fmt.Sprintf("Unable to retrieve private IP: %v", err))
 	}
 	
-	proxyPort := 5060
-  addr := net.UDPAddr{IP: nil, Port: proxyPort}
+	ProxyPort = 5060
 	// TODO: Support TCP receiving and sending (sometimes depends on Via header)
-  conn, err := net.ListenUDP("udp", &addr)
+  conn, err := net.ListenUDP("udp", &net.UDPAddr{Port: ProxyPort})
 
-	upstreamIP := net.IPv4(127,0,0,1)
-	upstreamPort := 5061
+	UpstreamIP = net.IPv4(127,0,0,1)
+	UpstreamPort = 5061
 
   if err != nil { // TODO: Properly handle errors
     fmt.Println(err)
   }
-  
-	if err != nil { // TODO: Properly handle errors
-		fmt.Println(err)
-	}
 
-  b := make([]byte, 100000) // TODO: Change to the theoritical max packet size (or SIP packet size if exists)
+	// The concurrency model here aims to achieve 3 things:
+	// 1. Network operations (send & recv) are always serial. To avoid any race conditions corruputing packets.
+	// 2. Order is important. Packets need to be proxied with the order they are received at, to avoid messing up one party's SIP flow.
+	// 3. Anything not related to network operations should be concurrent
 
-  for {
-    n, _, _, _, err := conn.ReadMsgUDP(b, []byte{})
-		
-		// TODO: GOroutine-ify
-		// TODO: Do we want to parse the partially received packet in case of an error?
-    packet := b[0:n]
-		
     
-    if err != nil { // TODO: Properly handle error
-      fmt.Println(err)
-    }
-		
-		p := Parse(packet)
-		
-		// Step 1: Determine if request or response, if response goto step 5
-		// Step 2: If this is an INVITE, respond with 100 trying
-		// Step 3: Add A VIA header before the original VIA header that indicates the proxy's endpoint, RFC3261 P:13
-		// Step 4: Proxy the request to the target, go to end.
-		// Step 5: This is a response, remove the proxy's VIA from the packet
-		// Step 6: Determine the target using the now top VIA header
-		// Step 7: Proxy
+  b := make([]byte, 65_535)
+	channels := make([]chan *ProxyResult, 0, 100_000)
 
-		var remoteIP net.IP
-		var remotePort int
+	go func(){ // The goroutine responsible for sending packets
+		i := 0
+		for {
+			var chann chan *ProxyResult
 
-		// TODO: Check that Max-Forwards didn't reach 0
-		// TODO: Decrement Max-Forwards
-
-		if p.Mtype == SIPRequest {
-			if p.RequestLine.Method == "INVITE" {
-				// TODO: Respond with 100 Trying
-			}
-			// Proxying to upstream
-			remoteIP = upstreamIP
-			remotePort = upstreamPort
-
-			// Prefer Proxy's private IP when possible
-			var proxyIp string
-			if IsPublicIP(upstreamIP) {
-				proxyIp = publicIp
-			} else {
-				proxyIp = privateIp
-			}
-			via, _ := p.FindHeaderByName("Via")
-			branch := strings.Split(via, ";")[2]
-			proxyVia := Header{ Name: "Via", Value: fmt.Sprintf("SIP/2.0/UDP %s:%d;rport;%s",proxyIp, proxyPort, branch)}
-			newHeaders := make([]Header, len(p.Headers) + 1)
-			newHeaders[0] = proxyVia
-			copy(newHeaders[1:], p.Headers)
-			p.Headers = newHeaders
-		} else {
-			if p.StatusLine.StatusCode == "100" {
-				continue // Proxy already responds with 100 Trying, no need to proxy 100s
-			} 
-
-			newHeaders := make([]Header, 0, len(p.Headers) - 1)
-			viaRemoved := false
-			for _, hd := range p.Headers {
-				if !viaRemoved && hd.Name == "Via" {
-					viaRemoved = true
-					continue
+			for chann == nil {
+				if len(channels) > i {
+					chann = channels[i]
 				}
-				newHeaders = append(newHeaders, hd)
+				time.Sleep(1 * time.Millisecond)
 			}
-			p.Headers = newHeaders
+			res :=  <- chann
 
-			via, err := p.FindHeaderByName("Via")
+			if res != nil {
+				_, _, err = conn.WriteMsgUDP(res.newPacket, []byte{}, res.targetAddr)
+				
+				if err != nil { // TODO: Properly handle errors
+					fmt.Println(err)
+				}
 
-			if err != nil {
-				fmt.Println(err)
-				fmt.Println(p.Headers)
-				fmt.Println(via)
 			}
-			// SIP/2.0/UDP 192.168.0.222:5062;rport;branch=z9hG4bKPjd87fd14a-5db8-4b66-a50b-c28bee9cc49c
-			transport := strings.Split(via, ";")[0]
-			ip, port, _ := net.SplitHostPort(strings.Split(transport, " ")[1])
-			remoteIP = net.ParseIP(ip)
-			remotePort, _ = strconv.Atoi(port)
+			i += 1
+
+			// every 1000 packets, resize the slice to avoid memory bloating
+			if (i > 1000){
+				channels = channels[i:]
+				i = 0
+			}
 		}
-		targetAddr := net.UDPAddr{ IP: remoteIP, Port: remotePort }
+	}()
 
+	for {
+		n, _, _, _, err := conn.ReadMsgUDP(b, []byte{})
 		
-		newPacket := []byte (p.String())
-
-		// fmt.Printf("Proxying %s to %v\n", p, targetAddr)
-
-		_, _, err = conn.WriteMsgUDP(newPacket, []byte{}, &targetAddr)
-
-		if err != nil { // TODO: Properly handle errors
+		if err != nil { // TODO: Properly handle error
       fmt.Println(err)
-    }
+    } else { // No point in handling partially receive packets in case of errors, the SIP protocol handles re-transmitting important information if it's never ACK'd
+    	packet := make([]byte, n)
+			copy(packet, b[0:n])
+			ch := make(chan *ProxyResult)
+			channels = append(channels, ch)
+			go Proxy(ch, packet)
+		}
+
+	
   }
 }
