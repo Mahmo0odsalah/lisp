@@ -5,7 +5,6 @@ package main
 // RFC 3261
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 )
@@ -57,10 +56,10 @@ func (msg SIPMessage) FindHeaderByName(name string) (string, error) {
 			return header.Value, nil
 		}
 	}
-	return "", errors.New("no header found with the provided name")
+	return "", fmt.Errorf("No header found with the name: %s", name)
 }
 
-func Parse(packet []byte) (m SIPMessage){ //TODO: Handle errors
+func Parse(packet []byte) (m SIPMessage){
 	// TODO: Look into optimizing this, sometimes we only need to read the startLine (or some headers) before making a decision, no need to parse the whole packet if this is taxing, examine if it's taxing first
 
 	// TODO: Look into these headers: (Route, Record-Route, Proxy-Require, Max-Forwards, and Proxy-Authorization)

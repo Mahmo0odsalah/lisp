@@ -27,7 +27,7 @@ func IsPublicIP(IP net.IP) bool {
 }
 
 // Get preferred outbound ip of this machine
-func GetPrivateIP() (string, error) {
+func GetPrivateIP() (ip string, err error) {
     conn, err := net.Dial("udp", "8.8.8.8:80")
 
 		if err != nil {
@@ -38,10 +38,11 @@ func GetPrivateIP() (string, error) {
 
     localAddr := conn.LocalAddr().(*net.UDPAddr)
 
-    return localAddr.IP.String(), nil
+		ip = localAddr.IP.String()
+    return
 }
 
-func GetPublicIP() (string, error) {
+func GetPublicIP() (ip string, err error) {
 	resp, err := http.Get("https://ifconfig.me/ip")
 
 	if (err != nil){
@@ -50,5 +51,6 @@ func GetPublicIP() (string, error) {
 
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
-	return string(body), err
+	ip = string(body)
+	return
 }
