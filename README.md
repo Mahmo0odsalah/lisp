@@ -1,5 +1,11 @@
 # lissp
 
-LIghtweight Stateful Sip Proxy
+LIghtweight Stateless Sip Proxy
 
-Proxy SIP traffic between 2 SIP UAs (no RTP). Implements RFC3261 specifications of a stateful proxy without maintining any state in memory, making it safe to reload and self-healing while maintining a minimal memory footprint.
+* Implements RFC3261
+* Proxies SIP traffic between 2 SIP UAs.
+* Completely stateless
+* Safe to hot reload
+* Self-healing
+* Minimal memory footprint.
+* Utilizes the Go Concurrency Model to maximize performance and speed.
